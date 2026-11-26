@@ -5,6 +5,7 @@ import { ZodError } from 'zod';
 interface AppError extends Error {
   status?: number;
   type?: string;
+  code?: string;
 }
 
 export function errors(
@@ -13,7 +14,11 @@ export function errors(
   res: Response,
   _next: NextFunction
 ) {
-  console.error(err);
+  const status = err.status || 500;
+
+  if (status >= 500) {
+    console.error('[EduPath Server Error]', err);
+  }
 
   if (err instanceof ZodError) {
     const details = err.issues
@@ -23,15 +28,18 @@ export function errors(
   }
 
   if (err instanceof MulterError) {
-    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
-    return res.status(status).json({ error: err.message });
+    const code = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(code).json({ error: err.message });
   }
 
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON request body' });
   }
 
-  return res
-    .status(err.status || 500)
-    .json({ error: err.message || 'Internal server error' });
+  const safeMessage =
+    status >= 500 && process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : err.message || 'Internal server error';
+
+  return res.status(status).json({ error: safeMessage });
 }

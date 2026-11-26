@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+export type DataSource = 'llm' | 'demo' | 'fallback';
+
 export type Profile = {
   name: string;
   education_status: string;
@@ -27,6 +29,7 @@ export type DocumentRecord = {
   mimeType: string;
   text: string;
   analysis: DocumentAnalysis;
+  source?: DataSource;
   uploadedAt: string;
 };
 
@@ -44,6 +47,7 @@ export type LearningPathPhase = {
   phase: string;
   weeks: number;
   objectives: string[];
+  difficulty?: string;
 };
 
 export type WeeklyPlanItem = {
@@ -119,6 +123,9 @@ export type ChatMessage = {
   content: string;
   actions?: string[];
   references?: string[];
+  source?: DataSource;
+  model?: string | null;
+  warning?: string;
   createdAt: string;
 };
 
@@ -191,7 +198,10 @@ export function createDemoTasks(): LearningTask[] {
 export function recalcProgress(userId: string): ProgressState {
   const tasks = store.tasks.get(userId) || [];
   const completedTasks = tasks.filter((t) => t.status === 'completed');
-  const hours = completedTasks.reduce((sum, t) => sum + (t.minutes || 0) / 60, 0);
+  const hours = completedTasks.reduce(
+    (sum, t) => sum + (t.minutes || 0) / 60,
+    0
+  );
   const state: ProgressState = {
     completed: completedTasks.length,
     hours: Number(hours.toFixed(2)),

@@ -78,7 +78,9 @@ function buildWeeklyPlan(
   profile: Profile,
   gaps: typeof fallback.gaps
 ): WeeklyPlanItem[] {
-  const high = gaps.filter((x) => x.priority === 'High');
+  // Added explicit type annotations to satisfy strict TS settings
+const high = gaps.filter((x: SkillGap) => x.priority === 'High');
+const medium = gaps.filter((x: SkillGap) => x.priority === 'Medium');
   const medium = gaps.filter((x) => x.priority === 'Medium');
   const days = [
     'Monday',
