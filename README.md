@@ -1,4 +1,4 @@
-﻿# EduPath â€” Personalized Learning & Skill Gap AI Agent
+﻿# EduPath - Personalized Learning & Skill Gap AI Agent
 
 **Your AI-powered path from where you are to where you want to be.**
 
