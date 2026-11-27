@@ -411,8 +411,8 @@ export async function analyzeGaps(
   evidence?: DocumentAnalysis,
   tasks: LearningTask[] = [],
   attempts: PracticeAttempt[] = []
-): Promise<AiResult<SkillGap[]>> {
-  return aiJson({
+): Promise<SkillGap[]> {
+  const result = await aiJson({
     systemPrompt:
       'You are an engineering competency assessor. Evaluate skill gaps objectively using only the provided learner profile, document evidence, completed tasks, and practice attempts.',
     userPrompt: `Learner Profile: ${JSON.stringify(profile)}\nDocument Evidence: ${JSON.stringify(evidence || {})}\nCompleted Tasks: ${JSON.stringify(tasks.filter((t) => t.status === 'completed'))}\nPractice Attempts: ${JSON.stringify(attempts)}\nReturn array of {skill,currentLevel (0-5),requiredLevel (1-5),status (Mastered|In Progress|Weak|Missing),priority (High|Medium|Low),reason,action}.`,
@@ -420,19 +420,21 @@ export async function analyzeGaps(
     fallbackFactory: () =>
       computeDeterministicGaps({ profile, evidence, tasks, attempts }),
   });
+  return result.data;
 }
 
 export async function generatePath(
   profile: Profile,
   gaps: SkillGap[]
-): Promise<AiResult<LearningPathPhase[]>> {
-  return aiJson({
+): Promise<LearningPathPhase[]> {
+  const result = await aiJson({
     systemPrompt:
       'You are a curriculum architect. Create a dependency-ordered, realistic learning path that skips already-mastered topics and fits the learner study_minutes/day.',
     userPrompt: `Learner: ${JSON.stringify(profile)}\nSkill Gaps: ${JSON.stringify(gaps)}\nReturn array of {phase,weeks,difficulty,objectives:string[]}.`,
     schema: learningPathSchema,
     fallbackFactory: () => computeDeterministicPath(profile, gaps),
   });
+  return result.data;
 }
 
 export function buildWeeklyPlan(
@@ -514,10 +516,11 @@ export async function generateChatResponse(params: {
     documentSkills: string[];
   };
 }) {
-  return aiChatCompletion({
+  const result = await aiChatCompletion({
     profile: params.profile,
     history: params.history,
     message: params.message,
     context: params.state,
   });
+  return result.data;
 }

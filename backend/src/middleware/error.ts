@@ -37,7 +37,9 @@ export function errors(
   }
 
   const safeMessage =
-    status >= 500 && process.env.NODE_ENV === 'production'
+    err.code === 'PERSISTENCE_UNAVAILABLE'
+      ? err.message
+      : status >= 500 && process.env.NODE_ENV === 'production'
       ? 'Internal server error'
       : err.message || 'Internal server error';
 

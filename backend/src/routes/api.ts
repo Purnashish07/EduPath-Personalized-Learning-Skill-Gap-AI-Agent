@@ -1,19 +1,20 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import {
-  store,
   id,
   demoProfile,
   createDemoTasks,
-  recalcProgress,
   type Profile,
   type ChatMessage,
   type PracticeQuestion,
   type ProjectIdea,
+  type SkillGap,
+  type UserState,
   type WeeklyPlanItem,
 } from '../store.js';
-import { pool } from '../db.js';
+import { checkDbHealth } from '../db.js';
 import { extract } from '../services/parser.js';
 import {
   analyzeGaps,
@@ -21,6 +22,13 @@ import {
   generateChatResponse,
 } from '../services/planner.js';
 import { ai, fallback } from '../services/ai.js';
+import {
+  PersistenceError,
+  persistenceMode,
+  persistenceModeError,
+  repository,
+} from '../services/repository.js';
+import { AuthenticationError, verifySupabaseAccessToken } from '../auth.js';
 
 const router = Router();
 
@@ -29,59 +37,53 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 },
 });
 
-const getUserId = (req: { headers: Record<string, unknown> }): string => {
-  const raw = req.headers['x-user-id'];
-  return typeof raw === 'string' && raw.trim() ? raw.trim() : 'demo-user';
+const getUserId = (req: Request): string => {
+  if (!req.userId) {
+    throw new AuthenticationError(401, 'Authentication is required');
+  }
+  return req.userId;
 };
 
-function ensureDemoSeeded(userId: string): void {
-  if (userId !== 'demo-user') return;
+async function getUserState(userId: string): Promise<UserState> {
+  const state = await repository.getState(userId);
+  if (
+    persistenceMode !== 'memory' ||
+    userId !== 'demo-user' ||
+    state.profile
+  ) {
+    return state;
+  }
 
-  if (!store.profiles.has(userId)) {
-    store.profiles.set(userId, { ...demoProfile });
-  }
-  if (!store.gaps.has(userId)) {
-    store.gaps.set(userId, [...fallback.gaps]);
-  }
-  if (!store.paths.has(userId)) {
-    store.paths.set(userId, [...fallback.path]);
-  }
-  if (!store.tasks.has(userId)) {
-    store.tasks.set(userId, createDemoTasks());
-    recalcProgress(userId);
-  }
-  if (!store.plans.has(userId)) {
-    store.plans.set(
-      userId,
-      buildWeeklyPlan(
-        store.profiles.get(userId)!,
-        store.gaps.get(userId) || fallback.gaps
-      )
-    );
-  }
+  state.profile = { ...demoProfile };
+  state.gaps = [...fallback.gaps];
+  state.path = [...fallback.path];
+  state.tasks = createDemoTasks();
+  state.plan = buildWeeklyPlan(state.profile, state.gaps);
+  await repository.saveProfile(userId, state.profile);
+  await repository.saveGaps(userId, state.gaps);
+  await repository.savePath(userId, state.path);
+  await repository.saveTasks(userId, state.tasks);
+  await repository.savePlan(userId, state.plan);
+  return state;
 }
 
-function getProfileOrError(userId: string): Profile {
-  ensureDemoSeeded(userId);
-  const profile = store.profiles.get(userId);
-  if (!profile) {
+function getProfileOrError(state: UserState): Profile {
+  if (!state.profile) {
     const err = new Error('Profile not found. Create a profile first.') as Error & {
       status?: number;
     };
     err.status = 404;
     throw err;
   }
-  return profile;
+  return state.profile;
 }
 
 function buildWeeklyPlan(
   profile: Profile,
   gaps: typeof fallback.gaps
 ): WeeklyPlanItem[] {
-  // Added explicit type annotations to satisfy strict TS settings
-const high = gaps.filter((x: SkillGap) => x.priority === 'High');
-const medium = gaps.filter((x: SkillGap) => x.priority === 'Medium');
-  const medium = gaps.filter((x) => x.priority === 'Medium');
+  const high = gaps.filter((x: SkillGap) => x.priority === 'High');
+  const medium = gaps.filter((x: SkillGap) => x.priority === 'Medium');
   const days = [
     'Monday',
     'Tuesday',
@@ -136,8 +138,8 @@ const medium = gaps.filter((x: SkillGap) => x.priority === 'Medium');
   });
 }
 
-function getStruggleSkills(userId: string): string[] {
-  const attempts = store.attempts.get(userId) || [];
+function getStruggleSkills(state: UserState): string[] {
+  const attempts = state.attempts;
   const bySkill = new Map<string, number[]>();
   for (const attempt of attempts) {
     const list = bySkill.get(attempt.skill) || [];
@@ -154,13 +156,20 @@ function getStruggleSkills(userId: string): string[] {
   return struggles;
 }
 
-function computeProgressSummary(userId: string) {
-  ensureDemoSeeded(userId);
-  const progress = store.progress.get(userId) || recalcProgress(userId);
-  const tasks = store.tasks.get(userId) || [];
-  const attempts = store.attempts.get(userId) || [];
-  const gaps = store.gaps.get(userId) || fallback.gaps;
-  const struggleSkills = getStruggleSkills(userId);
+function computeProgressSummary(state: UserState) {
+  const tasks = state.tasks;
+  const attempts = state.attempts;
+  const gaps = state.gaps;
+  const completedTasks = tasks.filter((task) => task.status === 'completed');
+  const progress = {
+    completed: completedTasks.length,
+    hours: Number(
+      completedTasks
+        .reduce((sum, task) => sum + (task.minutes || 0) / 60, 0)
+        .toFixed(2)
+    ),
+  };
+  const struggleSkills = getStruggleSkills(state);
 
   const practiceScore = attempts.length
     ? Math.round(
@@ -211,32 +220,70 @@ const profileSchema = z.object({
   skills: z.array(z.string()).default([]),
 });
 
-router.get('/health', (_req, res) => {
+router.get('/health', async (_req, res) => {
+  const database =
+    persistenceMode !== 'memory' && persistenceMode !== 'unconfigured'
+      ? await checkDbHealth()
+      : { configured: false, connected: false };
   res.json({
     ok: true,
     mode: process.env.LLM_API_KEY?.trim() ? 'ai' : 'demo',
-    database: Boolean(pool),
+    persistence: persistenceMode,
+    database: database.connected,
+    databaseConfigured: database.configured,
   });
 });
 
-router.post('/auth/demo', (_req, res) => {
-  ensureDemoSeeded('demo-user');
+router.post('/auth/demo', async (_req, res) => {
+  if (
+    persistenceMode !== 'memory' ||
+    process.env.DEMO_MODE?.trim().toLowerCase() !== 'true'
+  ) {
+    return res.status(403).json({
+      error: 'Demo access is disabled; sign in with an authenticated account.',
+    });
+  }
+  const state = await getUserState('demo-user');
   res.json({
     userId: 'demo-user',
-    profile: store.profiles.get('demo-user'),
+    profile: state.profile,
   });
 });
 
-router.get('/profile', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.profiles.get(userId) || null);
+router.use(async (req, _res, next) => {
+  try {
+    if (
+      persistenceMode === 'memory' &&
+      process.env.DEMO_MODE?.trim().toLowerCase() === 'true'
+    ) {
+      req.userId = 'demo-user';
+      return next();
+    }
+    if (persistenceMode !== 'postgres') {
+      throw new PersistenceError(persistenceModeError || undefined);
+    }
+    const authorization = req.get('authorization') || '';
+    const match = /^Bearer\s+(.+)$/i.exec(authorization);
+    if (!match) {
+      throw new AuthenticationError(401, 'Bearer access token is required');
+    }
+    req.userId = await verifySupabaseAccessToken(match[1]);
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 });
 
-router.post('/profile', (req, res) => {
+router.get('/profile', async (req, res) => {
+  const userId = getUserId(req);
+  const state = await getUserState(userId);
+  res.json(state.profile);
+});
+
+router.post('/profile', async (req, res) => {
   const userId = getUserId(req);
   const data = profileSchema.parse(req.body);
-  store.profiles.set(userId, data);
+  await repository.saveProfile(userId, data);
   res.json(data);
 });
 
@@ -256,7 +303,7 @@ router.post('/documents/upload', upload.single('file'), async (req, res) => {
   const analysis = await ai(
     `Extract learner evidence from: ${text.slice(0, 12000)}`,
     'Schema: {technicalSkills:string[],softSkills:string[],projects:string[],experience:string,certifications:string[],education:string}.',
-    fallback.profile
+    fallback.documentAnalysis
   );
 
   const docRecord = {
@@ -268,77 +315,80 @@ router.post('/documents/upload', upload.single('file'), async (req, res) => {
     uploadedAt: new Date().toISOString(),
   };
 
-  store.documents.set(userId, docRecord);
+  await repository.saveDocument(userId, docRecord);
   return res.json(docRecord);
 });
 
-router.get('/documents', (req, res) => {
-  res.json(store.documents.get(getUserId(req)) || null);
+router.get('/documents', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.document);
 });
 
 router.post('/skill-gap/analyze', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const doc = store.documents.get(userId);
-  const gaps = await analyzeGaps(profile, doc?.analysis);
-  store.gaps.set(userId, gaps);
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
+  const gaps = await analyzeGaps(
+    profile,
+    state.document?.analysis,
+    state.tasks,
+    state.attempts
+  );
+  await repository.saveGaps(userId, gaps);
   res.json(gaps);
 });
 
-router.get('/skill-gap', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.gaps.get(userId) || fallback.gaps);
+router.get('/skill-gap', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.gaps);
 });
 
 router.post('/learning-path/generate', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
+  const gaps = state.gaps;
   const path = await generatePath(profile, gaps);
-  store.paths.set(userId, path);
+  await repository.savePath(userId, path);
   res.json(path);
 });
 
-router.get('/learning-path', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.paths.get(userId) || fallback.path);
+router.get('/learning-path', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.path);
 });
 
-router.post('/weekly-plan/generate', (req, res) => {
+router.post('/weekly-plan/generate', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
+  const gaps = state.gaps;
   const plan = buildWeeklyPlan(profile, gaps);
-  store.plans.set(userId, plan);
+  await repository.savePlan(userId, plan);
   res.json(plan);
 });
 
-router.get('/weekly-plan', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.plans.get(userId) || []);
+router.get('/weekly-plan', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.plan);
 });
 
-router.get('/tasks', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.tasks.get(userId) || []);
+router.get('/tasks', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.tasks);
 });
 
-router.post('/tasks/seed', (req, res) => {
+router.post('/tasks/seed', async (req, res) => {
   const userId = getUserId(req);
   const tasks = createDemoTasks();
-  store.tasks.set(userId, tasks);
-  recalcProgress(userId);
+  await repository.saveTasks(userId, tasks);
   res.json(tasks);
 });
 
-router.patch('/tasks/:id', (req, res) => {
+router.patch('/tasks/:id', async (req, res) => {
   const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  const tasks = store.tasks.get(userId) || [];
+  const state = await getUserState(userId);
+  const tasks = state.tasks;
   const task = tasks.find((x) => x.id === req.params.id);
   if (!task) {
     return res.status(404).json({ error: 'Task not found' });
@@ -356,33 +406,35 @@ router.patch('/tasks/:id', (req, res) => {
     task.notes = body.notes;
   }
 
-  recalcProgress(userId);
+  await repository.saveTasks(userId, tasks);
   return res.json(task);
 });
 
-router.get('/practice', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.practice.get(userId) || []);
+router.get('/practice', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.practice);
 });
 
 router.post('/practice/generate', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
   const result = await ai<PracticeQuestion[]>(
-    `Generate 4 practice questions for ${profile.target_role}. Profile ${JSON.stringify(profile)} gaps ${JSON.stringify(gaps)}`,
+    `Generate 4 practice questions for ${profile.target_role}. Profile ${JSON.stringify(profile)} gaps ${JSON.stringify(state.gaps)}`,
     'Schema: array of {id,question,type,options:string[],answer,explanation,skill,difficulty}.',
     fallback.practice
   );
   const questions = Array.isArray(result) ? result : [result];
-  store.practice.set(userId, questions);
+  await repository.savePractice(userId, questions);
   res.json(questions);
 });
 
-router.post('/practice/:id/submit', (req, res) => {
+router.post('/practice/:id/submit', async (req, res) => {
   const userId = getUserId(req);
-  ensureDemoSeeded(userId);
+  const state = await getUserState(userId);
+  if (!state.practice.some((question) => question.id === req.params.id)) {
+    return res.status(404).json({ error: 'Practice question not found' });
+  }
 
   const body = z
     .object({
@@ -391,22 +443,21 @@ router.post('/practice/:id/submit', (req, res) => {
     })
     .parse(req.body);
 
-  const attempts = store.attempts.get(userId) || [];
-  attempts.push({
+  const attempt = {
     id: id(),
     questionId: req.params.id,
     skill: body.skill,
     score: body.score,
     createdAt: new Date().toISOString(),
-  });
-  store.attempts.set(userId, attempts);
+  };
+  state.attempts.push(attempt);
 
-  const struggles = getStruggleSkills(userId);
+  const struggles = getStruggleSkills(state);
   const struggleDetected = body.score < 70 || struggles.includes(body.skill);
   let intervention: string | null = null;
 
   if (struggleDetected) {
-    const tasks = store.tasks.get(userId) || [];
+    const tasks = state.tasks;
     const remedialTitle = `Prerequisite review: ${body.skill}`;
     const alreadyQueued = tasks.some(
       (t) => t.title === remedialTitle && t.status !== 'completed'
@@ -421,12 +472,11 @@ router.post('/practice/:id/submit', (req, res) => {
         difficulty: 'Foundational',
         remedial: true,
       });
-      store.tasks.set(userId, tasks);
-      recalcProgress(userId);
     }
     intervention = `Added "${remedialTitle}" to your active tasks to close the prerequisite gap.`;
   }
 
+  await repository.savePracticeResult(userId, attempt, state.tasks);
   res.json({
     score: body.score,
     struggleDetected,
@@ -438,43 +488,43 @@ router.post('/practice/:id/submit', (req, res) => {
   });
 });
 
-router.get('/projects', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.projects.get(userId) || []);
+router.get('/projects', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.projects);
 });
 
 router.post('/projects/generate', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
   const result = await ai<ProjectIdea[]>(
-    `Generate 3 portfolio projects for ${profile.target_role} that close these gaps: ${JSON.stringify(gaps)}`,
+    `Generate 3 portfolio projects for ${profile.target_role} that close these gaps: ${JSON.stringify(state.gaps)}`,
     'Schema: array of {title,problem,difficulty,duration,skills:string[],techStack:string[],features:string[],outcomes:string[],stretchGoals:string[]}.',
     fallback.projects
   );
   const projects = Array.isArray(result) ? result : [result];
-  store.projects.set(userId, projects);
+  await repository.saveProjects(userId, projects);
   res.json(projects);
 });
 
-router.get('/progress', (req, res) => {
-  const userId = getUserId(req);
-  res.json(computeProgressSummary(userId));
+router.get('/progress', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(computeProgressSummary(state));
 });
 
-router.get('/reports', (req, res) => {
-  const userId = getUserId(req);
-  res.json(store.reports.get(userId) || null);
+router.get('/reports', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.report);
 });
 
-router.post('/reports/generate', (req, res) => {
+router.post('/reports/generate', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
-  const summary = computeProgressSummary(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
-  const tasks = store.tasks.get(userId) || [];
-  const projects = store.projects.get(userId) || fallback.projects;
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
+  const summary = computeProgressSummary(state);
+  const gaps = state.gaps;
+  const tasks = state.tasks;
+  const projects = state.projects;
 
   const nextTask = tasks.find((t) => t.status !== 'completed');
   const report = {
@@ -513,40 +563,47 @@ router.post('/reports/generate', (req, res) => {
     projects: projects.map((p) => p.title),
   };
 
-  store.reports.set(userId, report);
+  await repository.saveReport(userId, report);
   res.json(report);
 });
 
-router.get('/chat', (req, res) => {
-  const userId = getUserId(req);
-  ensureDemoSeeded(userId);
-  res.json(store.messages.get(userId) || []);
+router.get('/chat', async (req, res) => {
+  const state = await getUserState(getUserId(req));
+  res.json(state.messages);
 });
 
 router.post('/chat', async (req, res) => {
   const userId = getUserId(req);
-  const profile = getProfileOrError(userId);
+  const state = await getUserState(userId);
+  const profile = getProfileOrError(state);
   const { message } = z
     .object({ message: z.string().trim().min(1, 'Message is required') })
     .parse(req.body);
 
-  const tasks = store.tasks.get(userId) || [];
+  const tasks = state.tasks;
   const nextTask = tasks.find((t) => t.status !== 'completed');
-  const progress = computeProgressSummary(userId);
-  const gaps = store.gaps.get(userId) || fallback.gaps;
+  const progress = computeProgressSummary(state);
+  const gaps = state.gaps;
+  const history = state.messages;
 
   const out = await generateChatResponse(
-    profile,
     {
-      nextAction: nextTask?.title || 'Implement Attention Mechanism',
-      gaps,
-      progress,
-      struggleSkills: progress.struggleSkills,
-    },
-    message
+      profile,
+      history,
+      message,
+      state: {
+        nextAction: nextTask?.title || 'Implement Attention Mechanism',
+        gaps,
+        progress,
+        struggleSkills: progress.struggleSkills,
+        learningPathPhases: state.path.map(
+          (phase) => phase.phase
+        ),
+        documentSkills: state.document?.analysis.technicalSkills || [],
+      },
+    }
   );
 
-  const history: ChatMessage[] = store.messages.get(userId) || [];
   const userMsg: ChatMessage = {
     id: id(),
     role: 'user',
@@ -561,8 +618,8 @@ router.post('/chat', async (req, res) => {
     references: out.references,
     createdAt: new Date().toISOString(),
   };
+  await repository.appendMessages(userId, [userMsg, aiMsg]);
   history.push(userMsg, aiMsg);
-  store.messages.set(userId, history);
 
   res.json({ ...out, messages: history });
 });

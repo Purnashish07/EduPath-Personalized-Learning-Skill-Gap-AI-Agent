@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LayoutDashboard,
@@ -31,6 +37,7 @@ import {
 } from 'recharts';
 import './index.css';
 import { api, uploadDocument } from './lib/api';
+import { supabase, supabaseConfigured } from './lib/auth';
 import type {
   AppState,
   ChatMessage,
@@ -110,6 +117,8 @@ function App() {
   const [data, setData] = useState<AppState>(INITIAL_STATE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,15 +171,50 @@ function App() {
   }, []);
 
   useEffect(() => {
-    api('/auth/demo', { method: 'POST', body: '{}' })
-      .then(() => load())
-      .catch((err) => {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Unable to reach EduPath backend API'
-        );
-      });
+    let active = true;
+    if (!supabaseConfigured || !supabase) {
+      api('/auth/demo', { method: 'POST', body: '{}' })
+        .then(() => {
+          if (!active) return;
+          setAuthReady(true);
+          setNeedsLogin(false);
+          return load();
+        })
+        .catch((err) => {
+          if (!active) return;
+          setAuthReady(true);
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to reach EduPath backend API'
+          );
+        });
+      return () => {
+        active = false;
+      };
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setNeedsLogin(!session);
+      setAuthReady(true);
+      if (session) void load();
+    });
+
+    void supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active) return;
+      if (sessionError) setError(sessionError.message);
+      setNeedsLogin(!data.session);
+      setAuthReady(true);
+      if (data.session) void load();
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, [load]);
 
   const runAction = async (endpoint: string) => {
@@ -204,6 +248,12 @@ function App() {
 
   return (
     <div className="min-h-screen gridbg">
+      {!authReady ? (
+        <main className="p-8 muted">Checking sign-in…</main>
+      ) : needsLogin ? (
+        <AuthGate />
+      ) : (
+      <>
       <aside className="fixed left-0 top-0 bottom-0 w-64 p-5 hidden lg:block">
         <div className="glass rounded-3xl h-full p-4 flex flex-col">
           <div className="px-3 py-3 mb-5">
@@ -269,6 +319,16 @@ function App() {
       </div>
 
       <main className="lg:ml-64 p-4 sm:p-6 lg:p-9 max-w-[1500px]">
+        {supabaseConfigured && (
+          <div className="flex justify-end mb-4">
+            <button
+              onClick={() => void supabase?.auth.signOut()}
+              className="px-3 py-2 rounded-xl bg-white/10 text-sm muted hover:text-white"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
         {error && (
           <div className="mb-5 p-4 rounded-2xl bg-red-500/10 border border-red-400/30 text-red-200 text-sm flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -332,7 +392,117 @@ function App() {
           <ProfileView d={data} onRefresh={load} setError={setError} />
         )}
       </main>
+      </>
+      )}
     </div>
+  );
+}
+
+function AuthGate() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      if (creatingAccount) {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (signUpError) throw signUpError;
+        if (!data.session) {
+          setMessage('Check your email to confirm the new account, then sign in.');
+        }
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (signInError) throw signInError;
+      }
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : 'Unable to authenticate'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen flex items-center justify-center p-5">
+      <form
+        onSubmit={submit}
+        className="glass rounded-3xl p-7 w-full max-w-md space-y-4"
+      >
+        <div className="flex items-center gap-2 font-bold text-xl">
+          <Sparkles size={20} className="accent" />
+          EduPath
+        </div>
+        <h1 className="text-2xl font-semibold">
+          {creatingAccount ? 'Create your account' : 'Sign in'}
+        </h1>
+        <p className="muted text-sm">
+          Use your EduPath account to securely access your personal learning data.
+        </p>
+        <label className="block text-sm">
+          Email
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            className="mt-1 w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2"
+          />
+        </label>
+        <label className="block text-sm">
+          Password
+          <input
+            type="password"
+            required
+            minLength={8}
+            autoComplete={creatingAccount ? 'new-password' : 'current-password'}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="mt-1 w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2"
+          />
+        </label>
+        {error && <p className="text-sm text-red-300">{error}</p>}
+        {message && <p className="text-sm accent">{message}</p>}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-xl bg-blue-500 py-2.5 font-semibold text-white disabled:opacity-60"
+        >
+          {busy ? 'Please wait…' : creatingAccount ? 'Create account' : 'Sign in'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setCreatingAccount((value) => !value);
+            setError(null);
+            setMessage(null);
+          }}
+          className="w-full text-sm muted hover:text-white"
+        >
+          {creatingAccount
+            ? 'Already have an account? Sign in'
+            : 'New to EduPath? Create an account'}
+        </button>
+      </form>
+    </main>
   );
 }
 

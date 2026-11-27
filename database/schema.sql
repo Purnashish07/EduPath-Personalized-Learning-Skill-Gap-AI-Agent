@@ -35,6 +35,7 @@ create table if not exists documents (
 create table if not exists skill_gaps (
   id uuid primary key default uuid_generate_v4(),
   user_id text not null,
+  sort_order int not null default 0,
   skill text,
   current_level int,
   required_level int,
@@ -64,6 +65,7 @@ create table if not exists weekly_plans (
 create table if not exists learning_tasks (
   id uuid primary key default uuid_generate_v4(),
   user_id text not null,
+  sort_order int not null default 0,
   title text,
   skill text,
   minutes int,
@@ -116,3 +118,21 @@ create table if not exists chat_messages (
   metadata jsonb,
   created_at timestamptz default now()
 );
+
+create table if not exists practice_questions (
+  user_id text primary key,
+  questions jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists documents_user_created_idx on documents (user_id, created_at desc);
+create index if not exists skill_gaps_user_idx on skill_gaps (user_id);
+create index if not exists skill_gaps_user_order_idx on skill_gaps (user_id, sort_order, id);
+create index if not exists learning_paths_user_created_idx on learning_paths (user_id, updated_at desc, created_at desc);
+create index if not exists weekly_plans_user_created_idx on weekly_plans (user_id, created_at desc);
+create index if not exists learning_tasks_user_created_idx on learning_tasks (user_id, created_at);
+create index if not exists learning_tasks_user_order_idx on learning_tasks (user_id, sort_order, created_at, id);
+create index if not exists practice_attempts_user_created_idx on practice_attempts (user_id, created_at);
+create index if not exists projects_user_created_idx on projects (user_id, created_at desc);
+create index if not exists reports_user_created_idx on reports (user_id, created_at desc);
+create index if not exists chat_messages_user_created_idx on chat_messages (user_id, created_at, id);

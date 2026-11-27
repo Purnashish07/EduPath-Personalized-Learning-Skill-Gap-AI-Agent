@@ -391,5 +391,103 @@ export async function aiChatCompletion(params: {
   }
 }
 
-// Export fallback data for convenience.
-export { fallback };
+export const fallback = {
+  profile: {
+    name: 'Alex Morgan',
+    education_status: 'Computer Science student',
+    experience_level: 'Intermediate',
+    target_role: 'AI Engineer',
+    career_goal: 'Become job-ready for an AI Engineer role',
+    study_minutes: 120,
+    learning_style: 'Project-based',
+    areas_to_improve: ['MLOps', 'LLM Evaluation'],
+    skills: ['Python', 'Machine Learning', 'RAG', 'Git', 'FastAPI'],
+  } satisfies Profile,
+  documentAnalysis: {
+    technicalSkills: ['Python', 'Machine Learning', 'RAG', 'FastAPI'],
+    softSkills: ['Communication', 'Problem solving'],
+    projects: ['RAG prototype', 'FastAPI inference service'],
+    experience: 'Intermediate project-based experience',
+    certifications: [],
+    education: 'Computer Science studies',
+  },
+  gaps: [
+    {
+      skill: 'Transformers',
+      currentLevel: 2,
+      requiredLevel: 4,
+      status: 'Weak',
+      priority: 'High',
+      reason: 'Transformer architecture depth needs stronger implementation evidence.',
+      action: 'Implement scaled dot-product attention and fine-tune a small model.',
+    },
+    {
+      skill: 'LLM Evaluation',
+      currentLevel: 2,
+      requiredLevel: 4,
+      status: 'Weak',
+      priority: 'High',
+      reason: 'Systematic retrieval and response evaluation are not yet demonstrated.',
+      action: 'Build a golden test set and measure retrieval Recall@k and faithfulness.',
+    },
+    {
+      skill: 'MLOps',
+      currentLevel: 1,
+      requiredLevel: 4,
+      status: 'Missing',
+      priority: 'High',
+      reason: 'Production deployment, monitoring, and CI skills need verification.',
+      action: 'Containerize an inference API and add health, metrics, and latency checks.',
+    },
+  ] satisfies SkillGap[],
+  path: [
+    {
+      phase: 'Foundations & Architecture',
+      weeks: 3,
+      objectives: ['Understand transformer attention', 'Build retrieval fundamentals'],
+      difficulty: 'Intermediate',
+    },
+    {
+      phase: 'Applied RAG & Evaluation',
+      weeks: 3,
+      objectives: ['Build a cited RAG pipeline', 'Create automated evaluation suites'],
+      difficulty: 'Intermediate',
+    },
+    {
+      phase: 'Deployment & MLOps',
+      weeks: 3,
+      objectives: ['Containerize inference services', 'Add monitoring and CI'],
+      difficulty: 'Advanced',
+    },
+  ] satisfies LearningPathPhase[],
+  practice: [
+    {
+      id: 'demo-transformers-1',
+      question: 'Why is scaled dot-product attention divided by the square root of the key dimension?',
+      type: 'multiple-choice',
+      options: [
+        'To reduce dimensionality',
+        'To prevent dot products from becoming excessively large',
+        'To normalize the input embeddings',
+        'To add positional information',
+      ],
+      answer: 'To prevent dot products from becoming excessively large',
+      explanation: 'Scaling reduces softmax saturation and helps gradients remain usable.',
+      skill: 'Transformers',
+      difficulty: 'Intermediate',
+    },
+  ] satisfies PracticeQuestion[],
+  projects: [
+    {
+      title: 'Production RAG Evaluation Platform',
+      problem: 'A technical team needs measurable retrieval quality before deploying an AI assistant.',
+      difficulty: 'Advanced',
+      duration: '3 weeks',
+      skills: ['RAG', 'LLM Evaluation', 'FastAPI'],
+      techStack: ['Python', 'FastAPI', 'PostgreSQL', 'Docker'],
+      features: ['Document ingestion', 'Vector retrieval', 'Citations', 'Recall@k dashboard'],
+      outcomes: ['Demonstrate evidence-grounded retrieval', 'Show measurable quality regressions'],
+      stretchGoals: ['Add reranking', 'Add continuous evaluation'],
+    },
+  ] satisfies ProjectIdea[],
+};

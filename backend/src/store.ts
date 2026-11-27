@@ -129,20 +129,35 @@ export type ChatMessage = {
   createdAt: string;
 };
 
-export const store = {
-  profiles: new Map<string, Profile>(),
-  documents: new Map<string, DocumentRecord>(),
-  gaps: new Map<string, SkillGap[]>(),
-  paths: new Map<string, LearningPathPhase[]>(),
-  plans: new Map<string, WeeklyPlanItem[]>(),
-  tasks: new Map<string, LearningTask[]>(),
-  progress: new Map<string, ProgressState>(),
-  practice: new Map<string, PracticeQuestion[]>(),
-  attempts: new Map<string, PracticeAttempt[]>(),
-  projects: new Map<string, ProjectIdea[]>(),
-  reports: new Map<string, ProgressReport>(),
-  messages: new Map<string, ChatMessage[]>(),
+export type UserState = {
+  profile: Profile | null;
+  document: DocumentRecord | null;
+  gaps: SkillGap[];
+  path: LearningPathPhase[];
+  plan: WeeklyPlanItem[];
+  tasks: LearningTask[];
+  practice: PracticeQuestion[];
+  attempts: PracticeAttempt[];
+  projects: ProjectIdea[];
+  report: ProgressReport | null;
+  messages: ChatMessage[];
 };
+
+export function emptyUserState(): UserState {
+  return {
+    profile: null,
+    document: null,
+    gaps: [],
+    path: [],
+    plan: [],
+    tasks: [],
+    practice: [],
+    attempts: [],
+    projects: [],
+    report: null,
+    messages: [],
+  };
+}
 
 export const id = () => randomUUID();
 
@@ -193,19 +208,4 @@ export function createDemoTasks(): LearningTask[] {
       difficulty: 'Intermediate',
     },
   ];
-}
-
-export function recalcProgress(userId: string): ProgressState {
-  const tasks = store.tasks.get(userId) || [];
-  const completedTasks = tasks.filter((t) => t.status === 'completed');
-  const hours = completedTasks.reduce(
-    (sum, t) => sum + (t.minutes || 0) / 60,
-    0
-  );
-  const state: ProgressState = {
-    completed: completedTasks.length,
-    hours: Number(hours.toFixed(2)),
-  };
-  store.progress.set(userId, state);
-  return state;
 }

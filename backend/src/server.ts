@@ -5,6 +5,7 @@ import api from './routes/api.js';
 import { errors } from './middleware/error.js';
 
 const app = express();
+export default app;
 
 const allowedOrigins = (
   process.env.FRONTEND_URL || 'http://localhost:5173,http://localhost:4173'
@@ -16,7 +17,14 @@ const allowedOrigins = (
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      const isVercelPreview =
+        Boolean(origin) &&
+        /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin || '');
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        (isVercelPreview && process.env.ALLOW_VERCEL_PREVIEW_ORIGINS === 'true')
+      ) {
         callback(null, true);
       } else {
         callback(null, false);
@@ -29,6 +37,8 @@ app.use('/api', api);
 app.use(errors);
 
 const port = Number(process.env.PORT || 4000);
-app.listen(port, () => {
-  console.log(`EduPath API on http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`EduPath API on http://localhost:${port}`);
+  });
+}

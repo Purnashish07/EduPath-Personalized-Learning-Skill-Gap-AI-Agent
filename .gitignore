@@ -8,3 +8,9 @@ coverage
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+.env
+.env.*
+!.env.example
+.vercel/
+backend/.vercel/
+frontend/.vercel/
