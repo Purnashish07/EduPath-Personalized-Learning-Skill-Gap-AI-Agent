@@ -1,7 +1,9 @@
-**Live Demo** ☯️
+**Live Demo** 🌐
 
 Public frontend: https://frontend-nu-henna-f3teo1ejli.vercel.app
+
 Public backend: https://backend-zeta-ochre-16.vercel.app
+
 Backend health verified: https://backend-zeta-ochre-16.vercel.app/api/health
 
 # EduPath — Personalized Learning & Skill Gap AI Agent
