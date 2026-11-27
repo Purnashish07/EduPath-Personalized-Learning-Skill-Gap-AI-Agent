@@ -12,8 +12,6 @@ Public backend: https://backend-zeta-ochre-16.vercel.app
 
 Backend health verified: https://backend-zeta-ochre-16.vercel.app/api/health
 
-GitHub: https://github.com/Purnashish07/EduPath-Personalized-Learning-Skill-Gap-AI-Agent
-
 ## What is implemented
 - React + TypeScript + Vite frontend with responsive premium UI
 - Express + TypeScript backend API
